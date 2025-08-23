@@ -5,6 +5,9 @@ import enum
 import heapq
 from abc import ABC, abstractmethod
 from typing import Dict, List, Tuple
+from collections import deque
+from vllm.core.block.prefix_caching_block import PrefixCachingBlock
+from .core.scheduler import Scheduler
 
 
 class EvictionPolicy(enum.Enum):
@@ -150,8 +153,113 @@ class LRUEvictor(Evictor):
         return len(self.free_table)
 
 
-def make_evictor(eviction_policy: EvictionPolicy) -> Evictor:
+
+
+
+# 实现有前向机制的驱逐策略
+
+class ContentHashAwareLRUEvictor(LRUEvictor):
+    """
+    LRU + content_hash aware eviction:
+    - 避免驱逐 waiting list 中未来会被访问的 block
+    """
+    def __init__(self, waiting: deque, block_size: int):
+        super().__init__()
+        self.waiting = waiting  # waiting list
+        self.block_size = block_size
+
+    def _is_block_in_waiting(self, block_meta: BlockMetaData) -> bool:
+        """
+        判断当前 block 的 content_hash 是否出现在 waiting list 中
+        """
+        block_hash = block_meta.content_hash
+        if block_hash is None:
+            return False
+        if block_hash in compute_waiting_blocks_content_hash(self.waiting, self.block_size):
+            return True
+        return False
+
+    def evict(self) -> Tuple[int, int]:
+        """
+        驱逐逻辑：LRU 顺序，但跳过 waiting list 中的 block
+        """
+        if len(self.free_table) == 0:
+            raise ValueError("No usable cache memory left")
+
+        while self.priority_queue:
+            last_accessed, _, block_id, content_hash = heapq.heappop(
+                self.priority_queue)
+            if block_id not in self.free_table:
+                continue
+            block_meta = self.free_table[block_id]
+
+            # 如果 block 在 waiting list 中则跳过
+            if self._is_block_in_waiting(block_meta):
+                continue
+
+            # 驱逐该 block
+            self.free_table.pop(block_id)
+            return block_id, content_hash
+
+        # 如果所有 block 都在 waiting list，可以选择妥协驱逐最旧 block
+        block_id, content_hash = next(iter(self.free_table.items()))
+        self.free_table.pop(block_id)
+        return block_id, content_hash
+
+
+
+def compute_waiting_blocks_content_hash(waiting: deque, block_size: int) -> List[int]:
+    """
+    遍历 waiting list 中的所有 sequences，把 token_ids 按 block_size 分块，
+    并计算每个 block 的 content_hash。
+    
+    Args:
+        waiting: Deque[SequenceGroup]
+        block_size: 每个 block 的 token 数量
+
+    Returns:
+        Dict[block_id, content_hash]
+    """
+    block_hash_list = []
+    block_id_counter = 0  # 为每个 block 分配唯一 ID
+
+    for seq_group in waiting:
+        seq = seq_group.seqs[0]
+        tokens = seq.inputs.prompt_token_ids
+        # 按 block_size 分块
+        num_tokens = len(tokens)
+        start = 0
+        prev_block = None
+        while start < num_tokens:
+            end = min(start + block_size, num_tokens)
+            block_tokens = tokens[start:end]
+
+            # 创建 Block（这里只是模拟初始化，计算 content_hash）
+            block = PrefixCachingBlock(
+                prev_block=prev_block,
+                token_ids=block_tokens,
+                block_size=block_size,
+                allocator=None  # 如果需要可以传 BlockAllocator
+            )
+
+            # 计算 content_hash
+            h = block.content_hash
+            block_hash_list.append(h)
+
+            # 链接前一个 block
+            prev_block = block
+            block_id_counter += 1
+            start = end
+
+    return block_hash_list
+
+
+def make_evictor(eviction_policy: EvictionPolicy, scheduler=None, block_size: int = 16) -> Evictor:
     if eviction_policy == EvictionPolicy.LRU:
-        return LRUEvictor()
+        waiting = scheduler.get_waiting()
+        if waiting is not None:
+            return ContentHashAwareLRUEvictor(waiting, block_size)
+        else:
+            return LRUEvictor()
     else:
         raise ValueError(f"Unknown cache eviction policy: {eviction_policy}")

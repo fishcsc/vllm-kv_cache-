@@ -28,6 +28,7 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
         num_gpu_blocks: int,
         num_cpu_blocks: int,
         block_size: int,
+        scheduler,
     ) -> DeviceAwareBlockAllocator:
         """Creates a CpuGpuBlockAllocator instance with the specified
         configuration.
@@ -81,12 +82,14 @@ class CpuGpuBlockAllocator(DeviceAwareBlockAllocator):
                 num_blocks=num_gpu_blocks,
                 block_size=block_size,
                 block_ids=gpu_block_ids,
+                scheduler=scheduler,
             )
 
             cpu_allocator = PrefixCachingBlockAllocator(
                 num_blocks=num_cpu_blocks,
                 block_size=block_size,
                 block_ids=cpu_block_ids,
+                scheduler=scheduler,
             )
         else:
             raise ValueError(f"Unknown allocator type {allocator_type=}")

@@ -67,7 +67,9 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
         watermark: float = 0.01,
         sliding_window: Optional[int] = None,
         enable_caching: bool = False,
+        scheduler=None,
     ) -> None:
+        self.scheduler = scheduler
         self.block_size = block_size
         self.num_total_gpu_blocks = num_gpu_blocks
         self.num_total_cpu_blocks = num_cpu_blocks
@@ -97,6 +99,7 @@ class SelfAttnBlockSpaceManager(BlockSpaceManager):
             num_gpu_blocks=num_gpu_blocks,
             num_cpu_blocks=num_cpu_blocks,
             block_size=block_size,
+            scheduler=self.scheduler,
         )
 
         self.block_tables: Dict[SeqId, BlockTable] = {}

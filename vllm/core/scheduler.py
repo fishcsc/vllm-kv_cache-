@@ -452,6 +452,7 @@ class Scheduler:
             num_cpu_blocks=num_cpu_blocks,
             sliding_window=self.cache_config.sliding_window,
             enable_caching=self.cache_config.enable_prefix_caching,
+            scheduler=self,
         )
 
         # Sequence groups in the WAITING state.
@@ -537,6 +538,12 @@ class Scheduler:
     def num_decoding_tokens_per_seq(self) -> int:
         """The number of new tokens."""
         return 1
+    
+    def get_waiting_list(self) -> Deque[SequenceGroup]:
+        """
+        返回当前实时的 waiting list
+        """
+        return self.waiting
 
     def add_seq_group(self, seq_group: SequenceGroup) -> None:
         # Add sequence groups to the waiting queue.
@@ -2026,3 +2033,6 @@ class Scheduler:
                              prefill_slot_budget)
 
         return num_new_tokens
+
+    def get_waiting(self):
+        return list(self.waiting_list)  # ⬅️ 这里拿到的永远是最新的 waiting
